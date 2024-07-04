@@ -1,0 +1,3 @@
+[submodule "CKA-similarity"]
+	path = CKA-similarity
+	url = git@github.com:jayroxis/CKA-similarity.git

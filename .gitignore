@@ -1,0 +1,5 @@
+checkpoints_cifar10/*pkl
+checkpoints_cifar10/*pth
+checkpoints_cifar10/*json
+checkpoints_mnist
+data/
