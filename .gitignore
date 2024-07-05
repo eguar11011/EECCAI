@@ -1,5 +1,10 @@
 checkpoints_cifar10/*pkl
 checkpoints_cifar10/*pth
 checkpoints_cifar10/*json
-checkpoints_mnist
+
+checkpoints_mnist/*pkl
+checkpoints_mnist/*pth
+checkpoints_mnist/*json
 data/
+
+CKA_similarity/__pycache__
