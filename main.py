@@ -18,7 +18,7 @@ device = "cuda:1" if torch.cuda.is_available() else "cpu" ; print(device)
 data_dir = "data"
 batch_size = 32
 learning_rate = 1e-3
-epochs = 50
+epochs = 25
 
 ##-------------------------------------------------------------
 
@@ -95,8 +95,15 @@ if not os.path.exists(checkpoints_dir):
 # Call the main function with the dataset argument
 train_dl_task_1, train_dl_task_2, test_dl_task_1, test_dl_task_2, test_dl = load_data(args.dataset)
 
+if args.dataset == "cifar10":
+    canales = 3
+elif args.dataset == "mnist":
+    canales = 1
+
 
 ##-------------------------------------------------------------------
+
+
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
@@ -123,7 +130,7 @@ class ResNet(nn.Module):
     def __init__(self, num_classes=10):
         super().__init__()
         self.in_channels = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(canales, 64, kernel_size=3, stride=1, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         
@@ -131,9 +138,11 @@ class ResNet(nn.Module):
         self.stage1 = self._make_stage(64, 2, stride=1)
         self.stage2 = self._make_stage(128, 2, stride=2)
         self.stage3 = self._make_stage(256, 2, stride=2)
+        self.stage4 = self._make_stage(512, 2, stride=2)
+        self.stage5 = self._make_stage(1024, 2, stride=2)
         
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(256, num_classes)
+        self.fc = nn.Linear(1024, num_classes)
 
         # Create backward hook to log the gradients of the last layer
         self.classifier_grads = [[] for _ in range(num_classes)]
@@ -156,14 +165,16 @@ class ResNet(nn.Module):
         x1 = self.stage1(x)
         x2 = self.stage2(x1)
         x3 = self.stage3(x2)
+        x4 = self.stage4(x3)
+        x5 = self.stage5(x4)
         
-        features = self.avg_pool(x3)
+        features = self.avg_pool(x5)
         features = torch.flatten(features, 1)
         
         logits = self.fc(features)
         
         return {
-            'fmaps': [x1, x2, x3],
+            'fmaps': [x1, x2, x3, x4, x5],
             'features': features,
             'logits': logits
         }
@@ -203,7 +214,7 @@ def evaluate(dataloader, net, loss_fn):
         n = len(X)
         X, y = X.to(device), y.to(device)
         logits = net(X)
-        fmaps = logits['fmaps']
+        fmaps = logits['fmaps'] 
         logits = logits['logits']
         preds = logits.argmax(1)
         loss += loss_fn(logits, y).item() * n
@@ -224,7 +235,7 @@ t_accs, e_accs = [], []
 for epoch in range(epochs):
     train(train_dl_task_1, net, loss_fn, optimizer)
     tacc, tloss, tconf, _ = evaluate(train_dl_task_1, net, loss_fn)
-    eacc, eloss, econf, _ = evaluate(test_dl, net, loss_fn)
+    eacc, eloss, econf, _ = evaluate(test_dl_task_1, net, loss_fn)
     t_accs.append(tacc)
     e_accs.append(eacc)
     print(f"Epoch: {epoch:02} TrainAcc: {tacc:.2f} TestAcc: {eacc:.2f} TrainLoss: {tloss:.4f} TestLoss: {eloss:.4f}")
@@ -243,7 +254,7 @@ t_accs, e_accs = [], []
 for epoch in range(epochs):
     train(train_dl_task_2, net, loss_fn, optimizer)
     tacc, tloss, tconf, _ = evaluate(train_dl_task_2, net, loss_fn)
-    eacc, eloss, econf, _ = evaluate(test_dl, net, loss_fn)
+    eacc, eloss, econf, _ = evaluate(test_dl_task_2, net, loss_fn)
     t_accs.append(tacc)
     e_accs.append(eacc)
     print(f"Epoch: {epoch:02} TrainAcc: {tacc:.2f} TestAcc: {eacc:.2f} TrainLoss: {tloss:.4f} TestLoss: {eloss:.4f}")
@@ -278,9 +289,9 @@ stage_2_sd["fc.bias"][5:] = stage_1_sd["fc.bias"][5:]
 net.load_state_dict(stage_2_sd)
 eacc, eloss, econf = evaluate_and_print(net, test_dl, loss_fn, "f0(0-5)_f1(5-10)")
 
-filename = os.path.join(checkpoints_dir, 'results_change_fc.pkl')
+filename = os.path.join(checkpoints_dir, 'results_change_fc_f0(0-5)_f1(5-10).pkl')
 with open(filename, 'wb') as f:
-    pickle.dump({'f0(0-5)_f1(5-10)': {'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}}, f)
+    pickle.dump({'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}, f)
 
 # Mezclar los pesos de las clases no vistas (segunda mezcla)
 stage_2_sd["fc.weight"] = stage_1_sd["fc.weight"]
@@ -288,30 +299,48 @@ stage_2_sd["fc.bias"] = stage_1_sd["fc.bias"]
 net.load_state_dict(stage_2_sd)
 eacc, eloss, econf = evaluate_and_print(net, test_dl, loss_fn, "f0(0-5)_f0(5-10)")
 
+filename = os.path.join(checkpoints_dir, 'results_change_fc_f0(0-5)_f0(5-10).pkl')
 with open(filename, 'wb') as f:
-    pickle.dump({'f0(0-5)_f0(5-10)': {'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}}, f)
+    pickle.dump({'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}, f)
 
-# Evaluar el modelo con stage_1_sd
-net.load_state_dict(stage_1_sd)
+
 
 del test_dl
 
-test_ds = torchvision.datasets.CIFAR10(
-    root=data_dir,
-    train=False,
-    download=True,
-    transform=transforms.ToTensor()
-)
-test_dl = DataLoader(test_ds, batch_size=10_000, shuffle=True, num_workers=2, pin_memory=True)  
+if args.dataset == "cifar10":
+    test_ds = torchvision.datasets.CIFAR10(
+        root=data_dir,
+        train=False,
+        download=True,
+        transform=transforms.ToTensor()
+    )
+    print("load test cifar10")
+elif args.dataset == "mnist":
+    test_ds = torchvision.datasets.MNIST(
+        root=data_dir,
+        train=False,
+        download=True,
+        transform=transforms.ToTensor()
+    )
+    print("load test mnist")
+
+test_dl = DataLoader(test_ds, batch_size=5_000, shuffle=True, num_workers=2, pin_memory=True)  
+
+net.load_state_dict(stage_1_sd)
 eacc, eloss, econf, fmaps1 = evaluate(test_dl, net, loss_fn)
 print(f"M0\nAccuracy: {eacc:.2f} Loss {eloss:.4f}")
 
 # Evaluar el modelo con stage_2_sd
+stage_2_sd = torch.load(os.path.join(checkpoints_dir, "w1.pth"), map_location=device)
 net.load_state_dict(stage_2_sd)
 eacc, eloss, econf, fmaps2 = evaluate(test_dl, net, loss_fn)
 print(f"M1\nAccuracy: {eacc:.2f} Loss {eloss:.4f}")
 
 ###############################################################################
+for i in fmaps1:
+    print(i.shape)
+for i in fmaps2: print(i.shape)
+
 
 sims: dict = {}
 save: list = [[], []]
@@ -320,16 +349,10 @@ save: list = [[], []]
 from CKA_similarity.CKA import CKA, CudaCKA
 np_cka = CudaCKA("cuda:1")
 
-for i in fmaps1:
-    print(i.shape)
-for i in fmaps2: print(i.shape)
-
-for i in range(3):
+for i in range(5):
     x_1 = fmaps1[i]
     x_2 = fmaps2[i]
     
-    #avg_x1 = x_1  
-    #avg_x2 = x_2  
  
     avg_x1 = x_1.mean(dim=(2, 3)).detach()
     avg_x2 = x_2.mean(dim=(2, 3)).detach()
