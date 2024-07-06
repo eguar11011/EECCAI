@@ -18,7 +18,7 @@ device = "cuda:1" if torch.cuda.is_available() else "cpu" ; print(device)
 data_dir = "data"
 batch_size = 32
 learning_rate = 1e-3
-epochs = 25
+epochs = 15
 
 ##-------------------------------------------------------------
 
@@ -84,11 +84,12 @@ def load_data(dataset_name):
 
     return train_dl_task_1, train_dl_task_2, test_dl_task_1, test_dl_task_2, test_dl
 
+#TODO: se demora bastante cargando los datos
 parser = argparse.ArgumentParser(description='Select dataset.')
 parser.add_argument('--dataset', type=str, choices=['cifar10', 'mnist'], help='The name of the dataset to use.')
 args = parser.parse_args()
 
-checkpoints_dir = f"checkpoints_{args.dataset}"
+checkpoints_dir = f"checkpoints_{args.dataset}_extend"
 if not os.path.exists(checkpoints_dir):
   os.mkdir(checkpoints_dir)
 
@@ -127,10 +128,10 @@ class BasicBlock(nn.Module):
         return out
 
 class ResNet(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=5):
         super().__init__()
         self.in_channels = 64
-        self.conv1 = nn.Conv2d(canales, 64, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         
@@ -178,6 +179,21 @@ class ResNet(nn.Module):
             'features': features,
             'logits': logits
         }
+
+    def generate_fc(self, feature_dim, nb_classes):
+        return nn.Linear(feature_dim, nb_classes)
+    
+    def update_fc(self, nb_classes):
+        fc = self.generate_fc(self.fc.in_features, nb_classes).to(device)
+        if self.fc is not None:
+            nb_output = self.fc.out_features
+            weight = copy.deepcopy(self.fc.weight.data)
+            bias = copy.deepcopy(self.fc.bias.data)
+            fc.weight.data[:nb_output] = weight
+            fc.bias.data[:nb_output] = bias
+
+        del self.fc
+        self.fc = fc
 
 
 
@@ -249,6 +265,11 @@ with open(filename, 'wb') as f:
         'econf': econf
     }, f)
 ###################################################### task 2
+# Actualizar el clasificador para la segunda etapa
+new_nb_classes = 10  
+net.update_fc(new_nb_classes)
+net.to(device)
+
 print("Segunda etapa")
 t_accs, e_accs = [], []
 for epoch in range(epochs):
@@ -284,24 +305,25 @@ def evaluate_and_print(net, test_dl, loss_fn, msg):
     return eacc, eloss, econf
 
 # Mezclar los pesos de las clases no vistas
-stage_2_sd["fc.weight"][5:] = stage_1_sd["fc.weight"][5:]
-stage_2_sd["fc.bias"][5:] = stage_1_sd["fc.bias"][5:]
-net.load_state_dict(stage_2_sd)
-eacc, eloss, econf = evaluate_and_print(net, test_dl, loss_fn, "f0(0-5)_f1(5-10)")
+if flag := False:
+    stage_2_sd["fc.weight"][5:] = stage_1_sd["fc.weight"][5:]
+    stage_2_sd["fc.bias"][5:] = stage_1_sd["fc.bias"][5:]
+    net.load_state_dict(stage_2_sd)
+    eacc, eloss, econf = evaluate_and_print(net, test_dl, loss_fn, "f0(0-5)_f1(5-10)")
 
-filename = os.path.join(checkpoints_dir, 'results_change_fc_f0(0-5)_f1(5-10).pkl')
-with open(filename, 'wb') as f:
-    pickle.dump({'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}, f)
+    filename = os.path.join(checkpoints_dir, 'results_change_fc_f0(0-5)_f1(5-10).pkl')
+    with open(filename, 'wb') as f:
+        pickle.dump({'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}, f)
 
-# Mezclar los pesos de las clases no vistas (segunda mezcla)
-stage_2_sd["fc.weight"] = stage_1_sd["fc.weight"]
-stage_2_sd["fc.bias"] = stage_1_sd["fc.bias"]
-net.load_state_dict(stage_2_sd)
-eacc, eloss, econf = evaluate_and_print(net, test_dl, loss_fn, "f0(0-5)_f0(5-10)")
+    # Mezclar los pesos de las clases no vistas (segunda mezcla)
+    stage_2_sd["fc.weight"] = stage_1_sd["fc.weight"]
+    stage_2_sd["fc.bias"] = stage_1_sd["fc.bias"]
+    net.load_state_dict(stage_2_sd)
+    eacc, eloss, econf = evaluate_and_print(net, test_dl, loss_fn, "f0(0-5)_f0(5-10)")
 
-filename = os.path.join(checkpoints_dir, 'results_change_fc_f0(0-5)_f0(5-10).pkl')
-with open(filename, 'wb') as f:
-    pickle.dump({'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}, f)
+    filename = os.path.join(checkpoints_dir, 'results_change_fc_f0(0-5)_f0(5-10).pkl')
+    with open(filename, 'wb') as f:
+        pickle.dump({'train_accs': t_accs, 'test_accs': e_accs, 'econf': econf}, f)
 
 
 
@@ -326,15 +348,21 @@ elif args.dataset == "mnist":
 
 test_dl = DataLoader(test_ds, batch_size=5_000, shuffle=True, num_workers=2, pin_memory=True)  
 
-net.load_state_dict(stage_1_sd)
-eacc, eloss, econf, fmaps1 = evaluate(test_dl, net, loss_fn)
-print(f"M0\nAccuracy: {eacc:.2f} Loss {eloss:.4f}")
-
 # Evaluar el modelo con stage_2_sd
 stage_2_sd = torch.load(os.path.join(checkpoints_dir, "w1.pth"), map_location=device)
 net.load_state_dict(stage_2_sd)
 eacc, eloss, econf, fmaps2 = evaluate(test_dl, net, loss_fn)
 print(f"M1\nAccuracy: {eacc:.2f} Loss {eloss:.4f}")
+
+
+net = ResNet()
+net.load_state_dict(stage_1_sd)
+net.update_fc(new_nb_classes)
+net.to(device)
+eacc, eloss, econf, fmaps1 = evaluate(test_dl, net, loss_fn)
+print(f"M0\nAccuracy: {eacc:.2f} Loss {eloss:.4f}")
+
+
 
 ###############################################################################
 for i in fmaps1:
